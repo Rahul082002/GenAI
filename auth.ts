@@ -1,34 +1,77 @@
-import NextAuth from "next-auth"
-import Credentials from "next-auth/providers/credentials"
-// Your own logic for dealing with plaintext password strings; be careful!
+import db from "@/lib/db";
+import CredentialsProvider from "next-auth/providers/credentials";
+import bcrypt from "bcryptjs";
 
- 
-export const { handlers, signIn, signOut, auth } = NextAuth({
+export const authOptions = {
   providers: [
-    Credentials({
-      // You can specify which fields should be submitted, by adding keys to the `credentials` object.
-      // e.g. domain, username, password, 2FA token, etc.
+    CredentialsProvider({
+      name: "Credentials",
       credentials: {
-        email: {},
-        password: {},
+        email: {
+          label: "email",
+          type: "email",
+          placeholder: "abc@example.com",
+        },
+        password: { label: "Password", type: "password" },
       },
-      authorize: async (credentials) => {
-        let user = null
- 
-        // logic to salt and hash password
-        
- 
-        // logic to verify if the user exists
-        
-        if (!user) {
-          // No user found, so this is their first attempt to login
-          // meaning this is also the place you could do registration
-          throw new Error("User not found.")
+      // TODO: User credentials type from next-aut
+      async authorize(credentials: any) {
+        // Do zod validation, OTP validation here
+        const hashedPassword = await bcrypt.hash(credentials.password, 10);
+        const existingUser = await db.user.findFirst({
+          where: {
+            email: credentials.email,
+          },
+        });
+
+        if (existingUser) {
+          console.log(`Password from DB is: ${existingUser.password}`);
+          console.log(`Raw Password from User is: ${credentials.password}`);
+          console.log(`Hashed Password from User is: ${hashedPassword}`);
+          const passwordValidation = await bcrypt.compare(
+            credentials.password,
+            existingUser.password
+          );
+          if (passwordValidation) {
+            return {
+              id: existingUser.id.toString(),
+              email: existingUser.email,
+            };
+          }
+          return null;
         }
- 
-        // return user object with their profile data
-        return user
+
+        try {
+          console.log("Creating New User");
+          const user = await db.user.create({
+            data: {
+              email: credentials.email,
+              password: hashedPassword,
+            },
+          });
+
+          return {
+            id: user.id.toString(),
+            email: user.email,
+          };
+        } catch (e) {
+          console.error({
+            message: "Error creating new user",
+            error: e,
+          });
+        }
+
+        return null;
       },
     }),
   ],
-})
+  secret: process.env.JWT_SECRET || "secret",
+  callbacks: {
+    // TODO: can u fix the type here? Using any is bad
+    async session({ token, session }: any) {
+      session.user.id = token.sub;
+
+      return session;
+    },
+  },
+};
